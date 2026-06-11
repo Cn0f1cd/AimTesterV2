@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AimTester V2 - 喵准测试</title>
+    <style>
+        body {
+            margin: 0;
+            background: #0a0a0a;
+            color: #0f0;
+            font-family: 'Press Start 2P', Arial, sans-serif;
+            text-align: center;
+            overflow: hidden;
+        }
+        canvas {
+            border: 4px solid #0f0;
+            box-shadow: 0 0 40px #0f0;
+            image-rendering: pixelated;
+            background: #000;
+        }
+        #ui {
+            position: absolute;
+            top: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(10,10,10,0.9);
+            padding: 15px 30px;
+            border: 3px solid #0f0;
+            border-radius: 10px;
+            z-index: 100;
+            min-width: 720px;
+            box-shadow: 0 0 20px #0f0;
+            transition: all 0.4s;
+        }
+        #ui.shrunk {
+            transform: translateX(-50%) scale(0.75);
+            top: 8px;
+            min-width: 540px;
+        }
+        button {
+            margin: 6px;
+            padding: 10px 18px;
+            font-size: 15px;
+            background: #111;
+            color: #0f0;
+            border: 2px solid #0f0;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        button:hover { background: #0f0; color: #000; }
+        button.active { background: #0f0 !important; color: #000 !important; }
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.95);
+            padding: 30px 50px;
+            border: 4px solid #0f0;
+            display: none;
+            z-index: 200;
+        }
+        h1 { margin: 8px 0; text-shadow: 0 0 10px #0f0; }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="ui">
+        <h1>🎯 AimTester V2 喵准测试</h1>
+        <div>时间: <span id="time">60</span>s | 分数: <span id="score">0</span> | 命中: <span id="hits">0</span> | 最高: <span id="highscore">0</span></div>
+        
+        <div style="margin:12px 0;">
+            <strong>难度：</strong>
+            <button onclick="setDifficulty(1)" id="diff1">简单</button>
+            <button onclick="setDifficulty(2)" id="diff2" class="active">中等</button>
+            <button onclick="setDifficulty(3)" id="diff3">困难</button>
+        </div>
+        
+        <div style="margin:12px 0;">
+            <strong>模式：</strong>
+            <button onclick="setMode(0)" id="mode0" class="active">普通</button>
+            <button onclick="setMode(1)" id="mode1">跟枪</button>
+            <button onclick="setMode(2)" id="mode2">静态</button>
+            <button onclick="setMode(3)" id="mode3">无限</button>
+        </div>
+        
+        <button onclick="startGame()" style="font-size:22px; padding:16px 50px; margin-top:10px;">🚀 开始游戏</button>
+    </div>
+
+    <canvas id="game" width="800" height="600"></canvas>
+
+    <div id="gameOver">
+        <h1>游戏结束</h1>
+        <p>最终得分: <span id="finalScore">0</span></p>
+        <p>最高记录: <span id="finalHigh">0</span></p>
+        <button onclick="restartGame()" style="font-size:18px; padding:12px 30px;">再来一局 (R)</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+        let targets = [];
+        let score = 0;
+        let hits = 0;
+        let timeLeft = 60;
+        let gameRunning = false;
+        let timer;
+        let difficulty = 2;
+        let mode = 0; // 0:普通 1:跟枪 2:静态 3:无限
+        let highScore = localStorage.getItem('aimHighScoreV2') || 0;
+        let mouseX = 400, mouseY = 300;
+        document.getElementById('highscore').textContent = highScore;
+
+        const colors = ['#f00', '#00f', '#f0f', '#ff0', '#0f0'];
+        const shapes = ['circle', 'square', 'triangle'];
+
+        class Target {
+            constructor() {
+                this.reset();
+                this.health = 100;
+                this.maxHealth = 100;
+            }
+            reset() {
+                this.size = difficulty === 1 ? 38 : difficulty === 3 ? 22 : 28;
+                this.x = Math.random() * (canvas.width - this.size * 1.2) + this.size/2;
+                this.y = Math.random() * (canvas.height - this.size * 1.2) + this.size/2;
+                this.speed = (difficulty === 1 ? 1.2 : difficulty === 3 ? 3.2 : 2.2) + Math.random() * 0.8;
+                this.vx = (Math.random() - 0.5) * this.speed;
+                this.vy = (Math.random() - 0.5) * this.speed;
+                this.color = colors[Math.floor(Math.random() * colors.length)];
+                this.shape = shapes[Math.floor(Math.random() * shapes.length)];
+                this.points = Math.floor(25 / (this.size / 25));
+                this.health = 100;
+            }
+            update(mouseX, mouseY) {
+                if (mode === 1) { // 跟枪模式 - 自动移动 + 血条
+                    // 自动移动
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
+                    if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
+
+                    // 血条逻辑：鼠标靠近时扣血
+                    const dx = mouseX - this.x;
+                    const dy = mouseY - this.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist < this.size * 0.8) {
+                        this.health -= 0.45;  // 减慢扣血速度
+                    } else {
+                        this.health = Math.min(100, this.health + 0.15);
+                    }
+                    if (this.health <= 0) {
+                        this.health = 0;
+                    }
+                } else if (mode !== 2) { // 普通/无限
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
+                    if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
+                }
+                // 静态模式不移动
+            }
+            draw() {
+                ctx.fillStyle = this.color;
+                if (this.shape === 'circle') {
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.size/2, 0, Math.PI*2);
+                    ctx.fill();
+                } else if (this.shape === 'square') {
+                    ctx.fillRect(this.x - this.size/2, this.y - this.size/2, this.size, this.size);
+                } else {
+                    ctx.beginPath();
+                    ctx.moveTo(this.x, this.y - this.size/2);
+                    ctx.lineTo(this.x - this.size/2, this.y + this.size/2);
+                    ctx.lineTo(this.x + this.size/2, this.y + this.size/2);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+
+                // 跟枪模式显示血条
+                if (mode === 1 && this.health < 100) {
+                    const barWidth = this.size * 1.2;
+                    const healthRatio = this.health / 100;
+                    ctx.fillStyle = '#f00';
+                    ctx.fillRect(this.x - barWidth/2, this.y - this.size/2 - 12, barWidth, 6);
+                    ctx.fillStyle = '#0f0';
+                    ctx.fillRect(this.x - barWidth/2, this.y - this.size/2 - 12, barWidth * healthRatio, 6);
+                }
+            }
+        }
+
+        function playHitSound() {
+            try {
+                const audio = new AudioContext();
+                const osc = audio.createOscillator();
+                osc.frequency.setValueAtTime(800, audio.currentTime);
+                const gain = audio.createGain();
+                osc.connect(gain);
+                gain.connect(audio.destination);
+                gain.gain.value = 0.3;
+                osc.start();
+                osc.stop(audio.currentTime + 0.08);
+            } catch(e) {}
+        }
+
+        function playEndSound() {
+            try {
+                const audio = new AudioContext();
+                const osc = audio.createOscillator();
+                osc.frequency.setValueAtTime(300, audio.currentTime);
+                osc.stop(audio.currentTime + 0.6);
+                osc.connect(audio.destination);
+                osc.start();
+            } catch(e) {}
+        }
+
+        function updateUI() {
+            document.getElementById('time').textContent = timeLeft;
+            document.getElementById('score').textContent = score;
+            document.getElementById('hits').textContent = hits;
+        }
+
+        function spawnTargets(count) {
+            targets = [];
+            for (let i = 0; i < count; i++) {
+                targets.push(new Target());
+            }
+        }
+
+        function gameLoop(mouseX, mouseY) {
+            if (!gameRunning) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            for (let i = targets.length - 1; i >= 0; i--) {
+                const t = targets[i];
+                t.update(mouseX, mouseY);
+                t.draw();
+
+                if (mode === 1 && t.health <= 0) {
+                    score += t.points * 2;
+                    hits++;
+                    playHitSound();
+                    targets.splice(i, 1);
+                    targets.push(new Target());
+                }
+            }
+
+            updateUI();
+        }
+
+        canvas.addEventListener('mousemove', e => {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+        });
+
+        canvas.addEventListener('click', e => {
+            if (!gameRunning) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+
+            for (let i = targets.length - 1; i >= 0; i--) {
+                const t = targets[i];
+                const dx = clickX - t.x;
+                const dy = clickY - t.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist < t.size/2 + 8) {
+                    if (mode === 1) {
+                        t.health -= 25; // 点击额外伤害
+                    } else {
+                        score += t.points;
+                        hits++;
+                        playHitSound();
+                        targets.splice(i, 1);
+                        targets.push(new Target());
+                    }
+                    break;
+                }
+            }
+        });
+
+        function startGame() {
+            gameRunning = true;
+            score = 0;
+            hits = 0;
+            timeLeft = mode === 3 ? 999 : 60;
+            document.getElementById('gameOver').style.display = 'none';
+            document.getElementById('ui').classList.add('shrunk'); // 缩小UI
+            
+            const targetCount = difficulty === 1 ? 4 : (difficulty === 3 ? 8 : 6);
+            spawnTargets(targetCount);
+            
+            if (mode !== 3) {
+                timer = setInterval(() => {
+                    timeLeft--;
+                    if (timeLeft <= 0) endGame();
+                }, 1000);
+            }
+            
+            const loop = setInterval(() => {
+                if (mode === 3) timeLeft++;
+                gameLoop(mouseX, mouseY);
+                if (!gameRunning) clearInterval(loop);
+            }, 16);
+        }
+
+        function endGame() {
+            gameRunning = false;
+            clearInterval(timer);
+            document.getElementById('ui').classList.remove('shrunk');
+            playEndSound();
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('aimHighScoreV2', highScore);
+            }
+            document.getElementById('finalScore').textContent = score;
+            document.getElementById('finalHigh').textContent = highScore;
+            document.getElementById('gameOver').style.display = 'block';
+        }
+
+        function restartGame() {
+            document.getElementById('gameOver').style.display = 'none';
+            document.getElementById('ui').classList.remove('shrunk');
+            startGame();
+        }
+
+        window.setDifficulty = function(d) {
+            difficulty = d;
+            document.querySelectorAll('#ui button[id^="diff"]').forEach(b => b.classList.remove('active'));
+            document.getElementById('diff' + d).classList.add('active');
+        };
+
+        window.setMode = function(m) {
+            mode = m;
+            document.querySelectorAll('#ui button[id^="mode"]').forEach(b => b.classList.remove('active'));
+            document.getElementById('mode' + m).classList.add('active');
+        };
+
+        document.addEventListener('keydown', e => {
+            if (e.key.toLowerCase() === 'r' && !gameRunning) {
+                restartGame();
+            }
+        });
+
+        // 初始化
+        updateUI();
+    </script>
+</body>
+</html>
